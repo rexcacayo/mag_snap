@@ -475,8 +475,101 @@ def _bigger(sides):
     return 1 if vol[1] >= vol[-1] else -1
 
 
+# --------------------------------------------------------------------------- corte desde la vista
+def parse_rays(text):
+    """'ox,oy,oz,dx,dy,dz;...' -> [(origen, dirección)]."""
+    out = []
+    for item in text.split(';'):
+        if item.strip():
+            v = [float(x) for x in item.split(',')]
+            out.append((np.array(v[:3]), np.array(v[3:6]) / max(np.linalg.norm(v[3:6]), 1e-12)))
+    return out
+
+
+def _bbox_corners(model):
+    from mathutils import Vector as V
+    return np.array([tuple(model.matrix_world @ V(c)) for c in model.bound_box])
+
+
+def view_film(tree, rays, model, scale):
+    """Cara del corte «desde la vista»: la línea dibujada se lleva en línea recta hacia el fondo,
+    como un cuchillo, atravesando toda la pieza. Los extremos se alargan hasta salir del modelo."""
+    if len(rays) < 2:
+        raise common.AddonError('Hacen falta al menos dos puntos: pincha de un lado a otro de la pieza.')
+    corners = _bbox_corners(model)
+    diag = float(np.linalg.norm(corners.max(0) - corners.min(0)))
+    center = corners.mean(0)
+    o0, d0 = rays[0]
+    persp = all(np.linalg.norm(o - o0) < 1e-6 * max(1.0, diag) for o, _d in rays)
+    tc = float((center - o0) @ d0)
+
+    def point(o, d):
+        return o + d * float((center - o) @ d)
+
+    def ray_to(o_ref, d_ref, target):
+        if persp:
+            dd = target - o0
+            return o0.copy(), dd / max(np.linalg.norm(dd), 1e-12)
+        return o_ref + (target - point(o_ref, d_ref)), d_ref.copy()
+
+    def hits(o, d):
+        return tree.ray_cast(Vector(o), Vector(d))[0] is not None
+
+    def extend(rs, at_end):
+        (oa, da), (ob, db) = (rs[-2], rs[-1]) if at_end else (rs[1], rs[0])
+        pa, pb = point(oa, da), point(ob, db)
+        step_dir = pb - pa
+        step_dir /= max(np.linalg.norm(step_dir), 1e-12)
+        step = diag / 100.0
+        extra = []
+        target = pb
+        for k in range(100):          # hasta que el rayo ya no toque el modelo, y un poco más
+            target = target + step_dir * step
+            o, d = ray_to(ob, db, target)
+            extra.append((o, d))
+            if not hits(o, d) and k >= 2:
+                break
+        for _ in range(3):
+            target = target + step_dir * step
+            extra.append(ray_to(ob, db, target))
+        return rs + extra if at_end else extra[::-1] + rs
+    rs = [(np.asarray(o, float), np.asarray(d, float)) for o, d in rays]
+    rs = extend(extend(rs, True), False)
+    # remuestrear a lo largo de la línea (en la profundidad del centro)
+    P = np.array([point(o, d) for o, d in rs])
+    seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
+    s = np.concatenate([[0], np.cumsum(seg)])
+    n = int(np.clip(s[-1] / max(diag / 150.0, 1e-9), 40, 400))
+    ts = np.linspace(0, s[-1], n)
+    idx = np.clip(np.searchsorted(s, ts, side='right') - 1, 0, len(rs) - 2)
+    w = ((ts - s[idx]) / np.maximum(seg[idx], 1e-12))[:, None]
+    O = np.array([rs[i][0] for i in idx]) * (1 - w) + np.array([rs[i + 1][0] for i in idx]) * w
+    D = np.array([rs[i][1] for i in idx]) * (1 - w) + np.array([rs[i + 1][1] for i in idx]) * w
+    D /= np.linalg.norm(D, axis=1, keepdims=True)
+    # profundidad: de delante a detrás de toda la caja del modelo
+    t_all = np.einsum('kij,ij->ki', corners[:, None, :] - O[None, :, :], D)
+    t0 = float(t_all.min()) - diag * 0.05
+    t1 = float(t_all.max()) + diag * 0.05
+    m = int(np.clip((t1 - t0) / max(diag / 120.0, 1e-9), 20, 160))
+    T = np.linspace(t0, t1, m)
+    W = O[:, None, :] + D[:, None, :] * T[None, :, None]          # n × m
+    verts = W.reshape(-1, 3)
+    tris = []
+    for i in range(n - 1):
+        for j in range(m - 1):
+            a, b, c, d = i * m + j, (i + 1) * m + j, (i + 1) * m + j + 1, i * m + j + 1
+            tris.append((a, b, c)); tris.append((a, c, d))
+    tris = np.array(tris, int)
+    fn = np.cross(verts[tris[:, 1]] - verts[tris[:, 0]], verts[tris[:, 2]] - verts[tris[:, 0]])
+    normal = fn.sum(0)
+    normal /= max(np.linalg.norm(normal), 1e-12)
+    return {'verts': verts, 'tris': tris, 'normal': normal, 'center': verts.mean(0),
+            'inside': np.ones(len(verts), bool), 'spacing': diag / 150.0,
+            'loop': P, 'dense': np.array([point(o, d) for o, d in zip(O, D)]), 'open': True}
+
+
 def split_by_line(context, model, clicks, curved, kind, radius_mm, length_mm, tolerance_mm, wall_mm,
-                  mode='AUTO', unit='AUTO', film=None):
+                  mode='AUTO', unit='AUTO', film=None, shape_name=None):
     """Separa `model` por la línea (corte curvo o recto limitado a la línea) y pone conectores."""
     common.require_solid(context, model)
     unit_code, scale = common.resolve_unit(context.scene, unit, model)
@@ -605,7 +698,7 @@ def split_by_line(context, model, clicks, curved, kind, radius_mm, length_mm, to
         raise
     loose = sum(len(sides[s]) for s in (1, -1)) - 2
     tail = f' Hay {loose} trozo{"s" if loose > 1 else ""} suelto{"s" if loose > 1 else ""} dentro de las piezas.' if loose > 0 else ''
-    shape = 'curvo' if curved else 'recto'
+    shape = shape_name or ('curvo' if curved else 'recto')
     if kind == 'NONE':
         return f'Separado en 2 piezas (corte {shape}) sin conectores. Original conservado y oculto.' + tail
     if kind == 'PIVOT':
