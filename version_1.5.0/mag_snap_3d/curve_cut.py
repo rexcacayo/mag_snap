@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Ricardo Lugaresi
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Corte curvo: la pieza se separa siguiendo la línea dibujada sobre la superficie.
 
 Cómo funciona:

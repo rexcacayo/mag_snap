@@ -24,3 +24,7 @@ Editar → Preferencias → Complementos → Instalar desde disco → `mag_snap_
 Vista 3D → tecla **N** → pestaña **MagSnap 3D**.
 
 Guía de uso completa en `mag_snap_3d/LEEME.md`.
+
+## Licencia
+
+GPL-3.0-or-later (ver [LICENSE](LICENSE)). Gratis para usar, modificar y compartir; si redistribuyes una versión modificada, publica también su código. Es la licencia que exige extensions.blender.org.

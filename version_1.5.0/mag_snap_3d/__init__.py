@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Ricardo Lugaresi
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 bl_info = {'name': 'MagSnap 3D (Magnet Splitter & Exporter)', 'author': 'Ricardo Lugaresi', 'version': (1, 5, 0),
            'blender': (4, 2, 0), 'location': 'Vista 3D > N > MagSnap 3D',
            'description': 'Separa sólidos por una línea dibujada (corte curvo que sigue la línea o recto), con imanes, espigas o eje de giro, y exporta en mm. Todo en modo Objeto', 'category': 'Object'}

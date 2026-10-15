@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Ricardo Lugaresi
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Línea de corte para MagSnap: se pincha alrededor del modelo y se corta por ella.
 La línea va pegada a la superficie y, al cerrarla, se ve en verde la cara del corte.
 
